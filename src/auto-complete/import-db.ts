@@ -1,58 +1,59 @@
-import { Expression } from '../parser'
+import { Expression } from "../parser";
 
-type Name = string
-type Path = string
+type Name = string;
+type Path = string;
 
 export interface Import {
-  name: Name
-  type: Expression
+  name: Name;
+  type: Expression;
+  isImportEquals: boolean;
 }
 
 export interface ImportObject extends Import {
-  file: File
+  file: File;
 }
 
 export interface File {
-  path: Path
-  aliases?: Path[]
+  path: Path;
+  aliases?: Path[];
 
-  imports?: Import[]
+  imports?: Import[];
 }
 
-type ImportMatcher = (imp: Import) => boolean
+type ImportMatcher = (imp: Import) => boolean;
 const isAnImport = (name: string | ImportMatcher, file: File) => {
-  const matcher =
-    typeof name === 'function' ? name : i => i.name.indexOf(name) > -1
+  const matcher = typeof name === "function" ? name : (i: Import) => i.name.indexOf(name) > -1;
 
-  return file.imports.findIndex(matcher) > -1
-}
+  return file.imports ? file.imports.findIndex(matcher) > -1 : false;
+};
 
 class ImportDb {
-  public files = new Array<File>()
+  public files = new Array<File>();
 
   /**
    * Returns the total amount of files in the store
    */
   public get size() {
-    return this.files.length
+    return this.files.length;
   }
 
   /**
    * Returns all the imports from the store
    */
   public all() {
-    const imports = new Array<ImportObject>()
+    const imports = new Array<ImportObject>();
 
-    this.files.forEach(file => {
-      file.imports.forEach(imp =>
-        imports.push({
-          ...imp,
-          file
-        })
-      )
-    })
+    this.files.forEach((file) => {
+      file.imports &&
+        file.imports.forEach((imp) =>
+          imports.push({
+            ...imp,
+            file
+          })
+        );
+    });
 
-    return imports
+    return imports;
   }
 
   /**
@@ -62,19 +63,29 @@ class ImportDb {
    */
   public getImports(
     name: Name | ImportMatcher,
-    fileMatcher: (file: File) => boolean = f => isAnImport(name, f)
+    fileMatcher: (file: File) => boolean = (f) => isAnImport(name, f)
   ): ImportObject[] {
-    const files = this.files.filter(fileMatcher)
+    const files = this.files.filter(fileMatcher);
 
-    const importMatcher: ImportMatcher =
-      typeof name === 'function' ? name : i => i.name === name
+    const importMatcher: ImportMatcher = typeof name === "function" ? name : (i) => i.name === name;
 
-    const imports = files.map(file => ({
-      ...file.imports.find(importMatcher),
-      file
-    }))
+    const imports: ImportObject[] = [];
 
-    return imports
+    for (const file of files) {
+      if (!file.imports) {
+        continue;
+      }
+
+      const fileImport = file.imports.find(importMatcher);
+
+      if (!fileImport) {
+        continue;
+      }
+
+      imports.push({ ...fileImport, file });
+    }
+
+    return imports;
   }
 
   /**
@@ -86,14 +97,14 @@ class ImportDb {
       imports: [],
       aliases: [],
       ...file
-    }
+    };
 
-    const index = this.files.findIndex(f => f.path === data.path)
+    const index = this.files.findIndex((f) => f.path === data.path);
 
     if (index === -1) {
-      this.files.push(data)
+      this.files.push(data);
     } else {
-      this.files[index] = data
+      this.files[index] = data;
     }
   }
 
@@ -102,7 +113,7 @@ class ImportDb {
    * @param files The files to save
    */
   public saveFiles(files: File[]) {
-    files.forEach(file => this.saveFile(file))
+    files.forEach((file) => this.saveFile(file));
   }
 
   /**
@@ -110,11 +121,9 @@ class ImportDb {
    * @param path The path to find
    */
   public getFile(path: Path) {
-    const file = this.files.find(
-      f => f.path === path || f.aliases.indexOf(path) > -1
-    )
+    const file = this.files.find((f) => f.path === path || (f.aliases ? f.aliases.indexOf(path) > -1 : false));
 
-    return file
+    return file;
   }
 
   /**
@@ -123,19 +132,25 @@ class ImportDb {
    * @param name The import name to add
    * @param type The import type
    */
-  public addImport(path: Path, name: Name, type: Expression = 'any') {
-    const file = this.getFile(path)
+  public addImport(path: Path, name: Name, type: Expression = "any", isImportEquals: boolean = false) {
+    const file = this.getFile(path);
 
     if (file) {
-      const exists = isAnImport(name, file)
-      if (!exists)
+      const exists = isAnImport(name, file);
+      if (!exists) {
+        if (!file.imports) {
+          file.imports = [];
+        }
+
         file.imports.push({
           name,
-          type
-        })
+          type,
+          isImportEquals
+        });
+      }
     }
 
-    return !!file
+    return !!file;
   }
 
   /**
@@ -144,15 +159,21 @@ class ImportDb {
    * @param name The import name to remove
    */
   public removeImport(path: Path, name: Name) {
-    const file = this.getFile(path)
+    const file = this.getFile(path);
 
     if (file) {
-      const index = file.imports.findIndex(i => i.name === name)
-      if (index !== -1) file.imports.splice(index, 1)
+      if (!file.imports) {
+        file.imports = [];
+      }
+
+      const index = file.imports.findIndex((i) => i.name === name);
+      if (index !== -1) {
+        file.imports.splice(index, 1);
+      }
     }
 
-    return !!file
+    return !!file;
   }
 }
 
-export default ImportDb
+export default ImportDb;

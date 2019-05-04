@@ -1,53 +1,39 @@
-import * as Monaco from 'monaco-editor'
+import * as Monaco from "monaco-editor";
 
-import { getMatches } from './../parser/util'
-import { ImportObject } from './import-db'
+import { getMatches } from "./../parser/util";
+import { ImportObject } from "./import-db";
+import { monaco } from ".";
+
+type Edit = Monaco.editor.IIdentifiedSingleEditOperation;
 
 export class ImportFixer {
-  private spacesBetweenBraces
-  private doubleQuotes
-  private useSemiColon
+  private spacesBetweenBraces: boolean = true;
+  private doubleQuotes: boolean = true;
+  private useSemiColon: boolean = true;
 
-  constructor(private editor: Monaco.editor.IStandaloneCodeEditor) {
-    this.useSemiColon = false
-    this.spacesBetweenBraces = true
-    this.doubleQuotes = false
-  }
+  constructor(private editor: Monaco.editor.IStandaloneCodeEditor) {}
 
   public fix(document: Monaco.editor.ITextModel, imp: ImportObject): void {
-    const edits = this.getTextEdits(document, imp)
-    this.editor.executeEdits('', edits)
+    const edits = this.getTextEdits(document, imp);
+    this.editor.executeEdits("", edits);
   }
 
-  public getTextEdits(document: Monaco.editor.ITextModel, imp: ImportObject) {
-    const edits = new Array<Monaco.editor.IIdentifiedSingleEditOperation>()
+  public getTextEdits(document: Monaco.editor.ITextModel, imp: ImportObject): Edit[] {
+    const edits: Edit[] = [];
 
-    // const { path } = imp.file
+    const { importResolved, fileResolved, imports } = this.parseResolved(document, imp);
 
-    // const relativePath = this.normaliseRelativePath(
-    //   path,
-    //   this.getRelativePath(document, path)
-    // )
-
-    const { importResolved, fileResolved, imports } = this.parseResolved(
-      document,
-      imp
-    )
-    if (importResolved) return edits
-
-    if (fileResolved) {
-      edits.push({
-        range: new Monaco.Range(0, 0, document.getLineCount(), 0),
-        text: this.mergeImports(document, imp, imports[0].path)
-      })
-    } else {
-      edits.push({
-        range: new Monaco.Range(0, 0, 0, 0),
-        text: this.createImportStatement(imp, true)
-      })
+    if (importResolved) {
+      return edits;
     }
 
-    return edits
+    const edit = fileResolved ? this.updateImportEdit(document, imp, imports[0].path) : this.createImportEdit(imp);
+
+    if (edit) {
+      edits.push(edit);
+    }
+
+    return edits;
   }
 
   /**
@@ -55,123 +41,87 @@ export class ImportFixer {
    * resolved by the user
    */
   private parseResolved(document: Monaco.editor.ITextModel, imp: ImportObject) {
-    const exp = /(?:import[ \t]+{)(.*)}[ \t]from[ \t]['"](.*)['"]/g
-    const currentDoc = document.getValue()
+    const exp = imp.isImportEquals
+      ? /import[ \t]+(.*)[ \t]*=[ \t]*require[ \t]*\([ \t]*['"](.*)['"]/g
+      : /(?:import[ \t]+{)(.*)}[ \t]from[ \t]['"](.*)['"]/g;
 
-    const matches = getMatches(currentDoc, exp)
-    const parsed = matches.map(([_, names, path]) => ({
-      names: names.split(',').map(imp => imp.trim().replace(/\n/g, '')),
-      path
-    }))
+    const currentDoc = document.getValue();
+
+    const matches = getMatches(currentDoc, exp);
+
+    const parsed = imp.isImportEquals
+      ? matches.map(([_, name, path]) => ({
+          names: [name],
+          path
+        }))
+      : matches.map(([_, names, path]) => ({
+          names: names.split(",").map((imp) => imp.trim().replace(/\n/g, "")),
+          path
+        }));
+
     const imports = parsed.filter(
-      ({ path }) =>
-        path === imp.file.path || imp.file.aliases.indexOf(path) > -1
-    )
+      ({ path }) => path === imp.file.path || (imp.file.aliases && imp.file.aliases.indexOf(path) > -1)
+    );
 
-    const importResolved =
-      imports.findIndex(i => i.names.indexOf(imp.name) > -1) > -1
+    const importResolved = imports.findIndex((i) => i.names.indexOf(imp.name) > -1) > -1;
 
-    return { imports, importResolved, fileResolved: !!imports.length }
+    return { imports, importResolved, fileResolved: !!imports.length };
   }
 
   /**
    * Merges an import statement into the document
    */
-  private mergeImports(
-    document: Monaco.editor.ITextModel,
-    imp: ImportObject,
-    path: string
-  ) {
-    const exp =
-      this.useSemiColon === true
-        ? new RegExp(`(?:import {)(?:.*)(?:} from ')(?:${path})(?:';)`)
-        : new RegExp(`(?:import {)(?:.*)(?:} from ')(?:${path})(?:')`)
+  private updateImportEdit(document: Monaco.editor.ITextModel, imp: ImportObject, path: string): Edit | null {
+    const currentDoc = document.getValue();
 
-    let currentDoc = document.getValue()
-    const foundImport = currentDoc.match(exp)
-
-    if (foundImport) {
-      let [workingString] = foundImport
-
-      const replaceTarget =
-        this.useSemiColon === true
-          ? /{|}|from|import|'|"| |;/gi
-          : /{|}|from|import|'|"| |/gi
-
-      workingString = workingString.replace(replaceTarget, '').replace(path, '')
-
-      const imports = [...workingString.split(','), imp.name]
-
-      const newImport = this.createImportStatement({
-        name: imports.join(', '),
-        path
-      })
-      currentDoc = currentDoc.replace(exp, newImport)
+    if (imp.isImportEquals) {
+      return null;
     }
 
-    return currentDoc
+    const exp = new RegExp(`(import[ \t]+{)([^}]*)}[ \t]*from[ \t]*['"]${path}['"])`);
+    const foundImport = currentDoc.match(exp);
+
+    if (foundImport && foundImport.index != null) {
+      const startOffset = foundImport.index + foundImport[1].length;
+      const importNames = foundImport[2];
+      const endOffset = startOffset + importNames.length;
+
+      const names = importNames.trim() ? importNames.split(",").map((s) => s.trim()) : [];
+      names.push(imp.name);
+      names.sort();
+
+      const spaceBetween = this.spacesBetweenBraces ? " " : "";
+
+      const startPos = document.getPositionAt(startOffset);
+      const endPos = document.getPositionAt(endOffset);
+
+      return {
+        range: new monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column),
+        text: `${spaceBetween}${names.join(", ")}${spaceBetween}`
+      };
+    }
+
+    return null;
   }
 
   /**
    * Adds a new import statement to the document
    */
-  private createImportStatement(
-    imp: ImportObject | { name: string; path: string },
-    endline: boolean = false
-  ): string {
-    const path = 'path' in imp ? imp.path : imp.file.aliases[0] || imp.file.path
+  private createImportEdit(imp: ImportObject): Edit | null {
+    const path = (imp.file.aliases && imp.file.aliases[0]) || imp.file.path;
 
-    const formattedPath = path.replace(/\"/g, '').replace(/\'/g, '')
-    let returnStr = ''
+    const quote = this.doubleQuotes ? `"` : `'`;
+    const spaceBetween = this.spacesBetweenBraces ? " " : "";
+    const semicolon = this.useSemiColon ? ";" : "";
+    const quotedImportPath = `${quote}${path}${quote}`;
 
-    const newLine = endline ? '\r\n' : ''
+    const importLine = imp.isImportEquals
+      ? `import ${imp.name} = require(${quotedImportPath})${semicolon}\n`
+      : `import {${spaceBetween}${imp.name}${spaceBetween}} from ${quotedImportPath}${semicolon}\n`;
 
-    if (this.doubleQuotes && this.spacesBetweenBraces) {
-      returnStr = `import { ${imp.name} } from "${formattedPath}";${newLine}`
-    } else if (this.doubleQuotes) {
-      returnStr = `import {${imp.name}} from "${formattedPath}";${newLine}`
-    } else if (this.spacesBetweenBraces) {
-      returnStr = `import { ${imp.name} } from '${formattedPath}';${newLine}`
-    } else {
-      returnStr = `import {${imp.name}} from '${formattedPath}';${newLine}`
-    }
-
-    if (this.useSemiColon === false) {
-      returnStr = returnStr.replace(';', '')
-    }
-
-    return returnStr
-  }
-
-  private getRelativePath(document, importObj: Monaco.Uri | any): string {
-    return importObj
-    // return importObj.discovered
-    //   ? importObj.fsPath
-    //   : path.relative(path.dirname(document.fileName), importObj.fsPath)
-  }
-
-  private normaliseRelativePath(importObj, relativePath: string): string {
-    const removeFileExtenion = rp =>
-      rp ? rp.substring(0, rp.lastIndexOf('.')) : rp
-
-    const makeRelativePath = rp => {
-      let preAppend = './'
-
-      if (!rp.startsWith(preAppend)) {
-        rp = preAppend + rp
-      }
-
-      // TODO
-      if (true /* /^win/.test(process.platform)*/) {
-        rp = rp.replace(/\\/g, '/')
-      }
-
-      return rp
-    }
-
-    relativePath = makeRelativePath(relativePath)
-    relativePath = removeFileExtenion(relativePath)
-
-    return relativePath
+    return {
+      range: new Monaco.Range(0, 0, 0, 0),
+      text: importLine
+    };
   }
 }

@@ -1,5 +1,5 @@
-export { ImportObject, File } from './auto-complete/import-db'
+export { ImportObject, File } from "./auto-complete/import-db";
 
-export { default as regexTokeniser } from './parser/regex'
+export { default as regexTokeniser } from "./parser/regex";
 
-export { default } from './auto-complete'
+export { default } from "./auto-complete";
